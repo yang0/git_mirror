@@ -25,10 +25,19 @@ class GitMirrorService:
             repo_name: 仓库名称 (plugin_repo_name, 如: autotask_autogui)
         """
         try:
+            logger.debug(f"Creating mirror with repo_url: {repo_url}, repo_name: {repo_name}")
             mirror_path = self.mirror_base_path / repo_name
             
             if mirror_path.exists():
-                await self._remove_repo(mirror_path)
+                logger.info(f"Mirror already exists at {mirror_path}, skipping")
+                clone_url = f"git://localhost:{self.git_daemon_port}/{repo_name}"
+                return {
+                    "status": "success",
+                    "repo_name": repo_name,
+                    "mirror_path": str(mirror_path),
+                    "clone_url": clone_url,
+                    "skipped": True
+                }
                 
             # 确保URL格式正确
             if not repo_url.startswith(('http://', 'https://', 'git://')):
@@ -46,7 +55,8 @@ class GitMirrorService:
                 "status": "success",
                 "repo_name": repo_name,
                 "mirror_path": str(mirror_path),
-                "clone_url": clone_url
+                "clone_url": clone_url,
+                "skipped": False
             }
             
         except Exception as e:
@@ -122,3 +132,44 @@ class GitMirrorService:
         """删除仓库"""
         if path.exists():
             await asyncio.to_thread(git.rmtree, path)
+
+    async def update_mirror(self, repo_url: str, repo_name: str) -> Dict:
+        """更新已存在的git仓库镜像
+        Args:
+            repo_url: 完整的仓库地址
+            repo_name: 仓库名称
+        """
+        try:
+            mirror_path = self.mirror_base_path / repo_name
+            
+            if not mirror_path.exists():
+                logger.warning(f"Mirror not found at {mirror_path}, creating new one")
+                return await self.create_mirror(repo_url, repo_name)
+                
+            logger.info(f"Updating mirror at {mirror_path}")
+            repo = git.Repo(mirror_path)
+            
+            # 确保URL格式正确
+            if not repo_url.startswith(('http://', 'https://', 'git://')):
+                repo_url = f"https://{repo_url}"
+                
+            # 更新所有引用
+            await asyncio.to_thread(repo.remote().fetch, '+refs/*:refs/*', prune=True)
+            
+            clone_url = f"git://localhost:{self.git_daemon_port}/{repo_name}"
+            logger.info(f"Mirror updated. Clone URL: {clone_url}")
+            
+            return {
+                "status": "success",
+                "repo_name": repo_name,
+                "mirror_path": str(mirror_path),
+                "clone_url": clone_url,
+                "updated": True
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to update mirror: {str(e)}", exc_info=True)
+            return {
+                "status": "error",
+                "error": str(e)
+            }
