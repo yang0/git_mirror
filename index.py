@@ -1,6 +1,4 @@
-# main.py
-import uvicorn
-from fastapi import FastAPI, Depends
+import asyncio
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy.orm import Session
 import logging
@@ -8,19 +6,18 @@ from datetime import datetime, timedelta
 from gitService import GitMirrorService
 from database import get_db
 from pluginModel import PluginRepoName
+from config import GIT_MIRROR_BASE_PATH, GIT_DAEMON_PORT
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI()
-mirror_service = GitMirrorService("G:/temp/git_mirrors", git_daemon_port=9418)
+mirror_service = GitMirrorService(GIT_MIRROR_BASE_PATH, git_daemon_port=GIT_DAEMON_PORT)
 scheduler = AsyncIOScheduler()
 
 async def check_and_mirror_new_repos(db: Session):
     """检查并镜像新的仓库"""
     try:
-        # 使用UTC时间
         one_hour_ago = datetime.now() - timedelta(hours=1)
         logger.info(f"Checking for new repos created in the last hour: {one_hour_ago}")
         
@@ -51,7 +48,6 @@ async def check_and_mirror_new_repos(db: Session):
 async def update_all_mirrors(db: Session):
     """更新所有仓库的镜像"""
     try:
-        # 获取所有仓库
         all_repos = db.query(PluginRepoName).all()
         logger.info(f"Updating {len(all_repos)} mirrors")
         
@@ -72,38 +68,40 @@ async def update_all_mirrors(db: Session):
     except Exception as e:
         logger.error(f"Error in update_all_mirrors: {str(e)}")
 
-@app.on_event("startup")
-async def startup_event():
-    """启动时启动git daemon服务和定时任务"""
-    await mirror_service.start_git_daemon()
-    
-    # 添加检查新仓库的定时任务
-    scheduler.add_job(
-        check_and_mirror_new_repos, 
-        'interval', 
-        minutes=1,
-        args=[next(get_db())]
-    )
-    
-    # 添加更新所有仓库的定时任务
-    scheduler.add_job(
-        update_all_mirrors,
-        'interval',
-        minutes=1,
-        args=[next(get_db())]
-    )
-    
-    scheduler.start()
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """关闭时停止git daemon服务和定时任务"""
-    await mirror_service.stop_git_daemon()
-    scheduler.shutdown()
-
-@app.post("/mirrors/{url:path}")
-async def create_mirror(url: str):
-    return await mirror_service.create_mirror(url)
+async def main():
+    """主函数"""
+    try:
+        # 启动git daemon服务
+        await mirror_service.start_git_daemon()
+        
+        # 添加检查新仓库的定时任务
+        scheduler.add_job(
+            check_and_mirror_new_repos, 
+            'interval', 
+            minutes=1,
+            args=[next(get_db())]
+        )
+        
+        # 添加更新所有仓库的定时任务
+        scheduler.add_job(
+            update_all_mirrors,
+            'interval',
+            minutes=1,
+            args=[next(get_db())]
+        )
+        
+        scheduler.start()
+        
+        # 保持程序运行
+        while True:
+            await asyncio.sleep(1)
+            
+    except KeyboardInterrupt:
+        logger.info("Shutting down...")
+    finally:
+        # 停止服务
+        await mirror_service.stop_git_daemon()
+        scheduler.shutdown()
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=8888)
+    asyncio.run(main())

@@ -1,7 +1,7 @@
 from datetime import datetime
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
-from databaseConfig import DATABASE_URL
+from config import DATABASE_URL
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy import Column, String
 import shortuuid
